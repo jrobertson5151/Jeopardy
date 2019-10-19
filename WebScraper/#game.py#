@@ -1,0 +1,155 @@
+from basic import *
+
+def categories(table_soup):
+    cat_tags = table_soup.find_all('td', attrs={'class': 'category_name'})
+    return [cat.text for cat in cat_tags]
+
+def round_num_to_str(round_num):
+    if round_num == 1:
+        return 'J'
+    elif round_num == 2:
+        return 'DJ'
+    elif round_num == 3:
+        return 'FJ'
+
+def url_from_game_id(game_id):
+    return 'http://www.j-archive.com/showgame.php?game_id=' + str(game_id)
+
+def parse_clue_id(clue_id):
+    #return (round as a string, cat_num, clue_num)
+    #this will be used a dict key
+    if clue_id == 'clue_FJ':
+        return ('FJ', 0, 0)
+    if clue_id == 'clue_TB':
+        return ('TB', 0, 0)
+    splits = clue_id.split('_')
+    return (splits[1], int(splits[2]), int(splits[3]))
+
+def get_info(soup, game_id):
+    rtn = dict()
+    
+    title_div = soup.find('div', id='game_title')
+    splits = title_div.h1.text.split()
+    rtn['show number'] = int(splits[1][1:])
+    
+    date_string = ' '.join(splits[4:])
+    rtn['date'] = datetime.datetime.strptime(date_string, '%B %d, %Y').date()
+
+    rtn['game_id'] = game_id
+
+    try:
+        rtn['game_comments'] = soup.find('div', id='game_comments').text
+    except:
+        pass
+
+    scores = soup.find_all('td', class_ = re.compile("(score_positive)|(score_negative)"))
+    scores = [dollar_to_int(s.text) for s in scores]
+    score_times = ['first_break', 'J_round', 'DJ_round', 'final', 'coryat']
+    rtn['scores'] = dict()
+    
+    for (i, t) in enumerate(score_times):
+        rtn['scores'][t] = scores[3*i:3*(i+1)]
+    
+    return rtn
+
+def get_contestants(soup):
+    rtn = dict()
+    contestants_soup = soup.find_all('p', attrs={'class': 'contestants'})
+    contestants_soup.reverse() #order at top of page is reverse of order later on
+    for (i, c_soup) in enumerate(contestants_soup):
+        player_id = int(c_soup.a['href'].split('=')[1])
+        player_name = c_soup.a.text
+        rtn[i+1] = {'player_name': player_name, 'player_id': player_id}
+    return rtn
+
+def get_cats(soup):
+    ids = ['jeopardy_round', 'double_jeopardy_round', 'final_jeopardy_round']
+    rtn = dict()
+    for i in ids:
+        try:
+            table_soup = soup.find('div', id=i)
+            cat_tags = table_soup.find_all('td', attrs={'class': 'category_name'})
+            rtn[i] = [cat_tag.text for cat_tag in cat_tags]
+        except:
+            pass
+    return rtn
+            
+def get_clues(soup):
+    clue_tags = soup.find_all('td', attrs={'class': 'clue'})
+    game_dict = dict() #dictionary for all clues of the game
+    for clue in clue_tags:
+        clue_dict = dict() #dictionary for this particular clue
+        try: #will fail for clues that weren't read
+            #ipdb.set_trace()
+            clue_text_tag = clue.find('td', attrs={'class', 'clue_text'})
+            (round_str, cat_num, clue_num) = parse_clue_id(clue_text_tag['id'])
+            try:
+                game_dict[round_str][str((cat_num, clue_num))] = clue_dict
+            except:
+                game_dict[round_str] = {str((cat_num, clue_num)): clue_dict}
+            
+            clue_text = clue_text_tag.text
+            clue_dict['clue'] = clue_text
+
+            clue_dict['clue_order_number'] = int(clue.find('td', class_='clue_order_number').text)
+            
+            if round_str in ['J', 'DJ']:
+                mouse_over_tag = BeautifulSoup(clue.div['onmouseover'], 'lxml')
+            else:
+                j = 0 if round_str == 'FJ' else 1
+                mouse_over_tag = soup.find_all('table',
+                                        attrs={'class': 'final_round'})[j].div['onmouseover']
+                mouse_over_tag = BeautifulSoup(mouse_over_tag, 'lxml')
+
+            correct_resp = mouse_over_tag.find('em').text
+            clue_dict['correct response'] = correct_resp
+
+            correct_cont_tag = mouse_over_tag.find('td', class_='right')
+            if correct_cont_tag:
+                clue_dict['correct'] = correct_cont_tag.text
+            
+            wrong_tags = mouse_over_tag('td', attrs={'class': 'wrong'})
+            for (i, wrong) in enumerate(wrong_tags):
+                if wrong.text == 'Triple Stumper':
+                    clue_dict['Triple Stumper'] = True
+                else:
+                    #ipdb.set_trace()
+                    clue_dict['wrong' + str(i)] = wrong.text
+
+            dd_tag = clue.find('td', attrs={'class': 'clue_value_daily_double'})
+            if dd_tag:
+                clue_dict['Daily Double'] = True
+                clue_dict['Daily Double Wager'] = int(dd_tag.text[5:])
+                #should probably parse but whatever
+        
+        except:
+            pass
+
+    return game_dict            
+
+def convert_datetime(d):
+    if isinstance(d, datetime.date):
+        return d.__str__()
+                    
+def game(game_id, dest = None, driver=None):
+    url = url_from_game_id(game_id)
+    if driver == None:
+        driver = driver_init()
+        soup = get_soup(driver, url)
+        driver.close()
+    else:
+        soup = get_soup(driver, url)
+    
+    clues_dict = get_clues(soup)
+    contestants_dict = get_contestants(soup)
+    info_dict = get_info(soup, game_id)
+    cats_dict = get_cats(soup)
+    output_dict = {'info': info_dict, 'categories': cats_dict,
+                   'contestants': contestants_dict, 'clues': clues_dict}
+
+    if dest is not None:
+        with open(dest, 'w') as output_file:
+            json.dump(output_dict, output_file, default=convert_datetime)
+    else:
+        return json.dumps(output_dict, output_file, default=convert_datetime)
+

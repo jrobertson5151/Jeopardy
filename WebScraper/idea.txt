@@ -1,0 +1,2 @@
+represent game as dict with keys: (round_str, cat_num, q_num), e.g. ('J', 1, 4)
+with (3, 0, 0) as FJ

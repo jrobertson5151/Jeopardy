@@ -1,0 +1,5 @@
+-predict human wagers
+-wager optimally against human wagerers
+-wager optimally against self
+-maximize expected winnings
+-maximize winning probability
